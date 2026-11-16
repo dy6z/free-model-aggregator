@@ -38,13 +38,13 @@ class Gateway(BaseHTTPRequestHandler):
 
 
 def model(name, rating, tools=True):
-    return {'id': name, 'rating_milli': rating, 'free': True, 'tools': tools, 'vision': False, 'json': True, 'context_length': 32768, 'provider': 'openrouter', 'display_name': name}
+    return {'id': name, 'rating_milli': rating, 'free': True, 'tools': tools, 'vision': False, 'json': True, 'context_length': 32768, 'provider': 'openrouter', 'display_name': name, 'context': 32768}
 
 class Integration(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.servers = [ThreadingHTTPServer(('127.0.0.1', 0), Gateway), ThreadingHTTPServer(('127.0.0.1', 0), main.Handler)]
-        main.GATEWAY_URL = 'http://127.0.0.1:'+str(cls.servers[0].server_port)
+        main.GATEWAY_ROOT = 'http://127.0.0.1:'+str(cls.servers[0].server_port)
         main.GATEWAY_KEY = 'local-fixture'
         cls.base = 'http://127.0.0.1:'+str(cls.servers[1].server_port)
         for server in cls.servers:
@@ -58,9 +58,9 @@ class Integration(unittest.TestCase):
 
     def setUp(self):
         CALLS.clear()
-        main.BRIEF = {'models': [model('rate:free', 1000), model('down:free', 900), model('ok:free', 800)], 'prompts': [], 'error': None}
-        main.manifest_index = 0
-        main.CATALOG = main.build_catalog(main.BRIEF)
+        main.BRIEF = {'models': [model('rate:free', 1000), model('down:free', 900), model('ok:free', 800)], 'prompts': [], 'fault': None}
+        main.arrival_index = 0
+        main.CATALOG = main.catalog_document(main.BRIEF)
 
     def request(self, path, body=None, headers=None):
         req = urllib.request.Request(self.base+path, data=json.dumps(body).encode() if body is not None else None, headers=headers or {'Content-Type': 'application/json'})
