@@ -1,88 +1,20 @@
-# free-model-aggregator-02's Python starter kit: one server, two client wires, and a real free model
-# behind every answer. It is the Python twin of main.ts beside it: same lifecycle, same routes, same
-# catalog, same deliberate weaknesses, written in the idiom of Python 3.13's standard library.
-#
-# This is a working entry to start from, not a competitive answer. It is the house baseline for the
-# bounty, deliberately weak, and worth a fraction of the score: use it to see the shape of a trial, then
-# replace its routing, its failover and its catalog with your own. The gaps are marked TODO below.
-#
-# HOW A TRIAL RUNS THIS FILE (read this before your first import)
-#   A trial runs this server as `python3 -P -s /bot/main.py` from your repository's root, on Python 3.13,
-#   with PYTHONHASHSEED=0. Nothing is installed: the standard library alone is importable. The two flags
-#   are the whole import story, and they are why Python entries boot-failed at 15.5% on the forge bounty
-#   while Node's failed at 0.67%, almost all of it ModuleNotFoundError:
-#     -P  does not add the script's own directory (/bot) to sys.path. `import providers` will NOT find a
-#         providers.py sitting beside main.py. A sibling module needs its own package, or this line before
-#         the import:
-#             sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-#         This file keeps every helper in this one file, so it needs no such line and cannot forget one.
-#     -s  does not add the user site-packages directory to sys.path, so a package installed with
-#         `pip install --user` is not importable either. Vendor what you need into the repository and add
-#         its directory to sys.path yourself, if you must; the standard library is the safe floor.
-#   -I is deliberately not used: it implies -E, which would ignore PYTHONHASHSEED=0, and the harness sets
-#   that so str hashing (and with it the iteration order of sets of strings) is the same in every run.
-#
-# WHAT A TRIAL GIVES YOU
-#   A trial runs this server as `python3 -P -s /bot/main.py` from your repository's root, with Python
-#   3.13's standard library alone (nothing is installed; see above). The env is at $MAKEFUN_ENV_URL; your
-#   model calls go through the grader's gateway at $OPENAI_BASE_URL, an OpenAI-compatible endpoint that
-#   reaches OpenRouter on the key you pushed to the competition. The brief at $MAKEFUN_PROMPT_FILE carries
-#   two documents:
-#     - the free model list: each free OpenRouter model's gateway id
-#       (`openrouter/<vendor>/<model>:free`), its published rating in milli-points, what it can do
-#       (tools, vision, JSON mode, context length) and its free flag;
-#     - the six prompts: each one's id, its api (openai or anthropic), whether it streams, its weight
-#       (1 or 2) and the requirements a model must meet to serve it. Each prompt carries a unique token
-#       the answer must contain.
-#   The server:
-#     1. listens on 0.0.0.0 at a free port (never 8080: the env itself is there on one layout);
-#     2. POSTs $MAKEFUN_ENV_URL/register {"protocol_version": 1, "port": <port>, "catalog": <catalog>};
-#     3. serves GET /v1/models (answering in the shape of the auth header it got: x-api-key means
-#        Anthropic, Authorization means OpenAI), POST /v1/chat/completions and POST /v1/messages, each
-#        with a JSON body or with server-sent events;
-#     4. answers each prompt by dialling ONE free model through the gateway. OPENAI_API_KEY in the
-#        sandbox is a dummy the gateway swaps for the OpenRouter key you pushed; the real key never
-#        enters the sandbox;
-#     5. polls GET $MAKEFUN_ENV_URL/work every 100 ms and exits 0 when the env says {"done": true}. A
-#        process still running when the wall ends scores zero, so never wait for anything else.
-#   `python3 main.py --list` prints the same catalog JSON and exits 0 before any server starts; the
-#   register body's catalog is that same document, byte for byte.
-#
-# THE MODEL RULE
-#   Whatever this server reports in a response's `model` field must be the model it actually dialled.
-#   The house records every gateway call and scores the model that really answered. This starter sends
-#   the brief's model id in the gateway request and puts that same id back on every answer and every
-#   streamed chunk (the provider's own answer spells it without the gateway's `openrouter/` prefix), so
-#   its claim is the call it made, never another. A prompt whose reported model has no matching
-#   successful call in the house's record earns nothing.
-#
-# THE BASELINE'S WEAKNESSES (each is a scoring component you can win)
-#   - quality (60%): it ignores the published ratings. It takes the first free model in the brief, in
-#     the brief's order, that can meet the request's requirements. TODO(quality): rank the free
-#     candidates by rating_milli at the prompt's requirements and prefer the best.
-#   - failover (10%): a gateway call answered with a 4xx or a 5xx becomes a 502 to the client, and that
-#     prompt is lost. TODO(failover): retry the prompt on the next free model that meets it, and count
-#     every call it costs, because the tie-break is the number of gateway calls.
-#   - rate limits: after a 429 it keeps picking the same first model, so one rate-limited model takes
-#     every later prompt down with it. TODO(cooldowns): track each model's refusals and back off per
-#     model, and never spend a call on a model that is cooling down.
-#   - the catalog (5%): it lists every free model the brief names, which is exactly the fourteen ids
-#     this column scores. TODO(catalog): keep it exact — register that same set and answer GET /v1/models
-#     with it on both auth headers; the column checks the register body and both answers against exactly
-#     those fourteen ids, so listing fewer loses it as surely as listing more.
-#   The trial's rules are in the kit's RULES.txt; read them for the score's columns and the tie-break.
-#
-# FILES
-#   A repository holds one entrypoint: a Python entry keeps this main.py and not main.ts (a snapshot with
-#   both at its root is refused as ambiguous), and a Node entry keeps main.ts and not this file. This file
-#   is self-contained: lib/ belongs to the Node starter and nothing here imports it.
-#   main.py            this server: the brief, the catalog, the routes, the register and the poll (all of
-#                      it, in one file, because `-P` keeps /bot off sys.path).
-#   main.ts            the Node 22 twin of this file, beside lib/.
-#   lib/providers.ts   the brief's types and parser, the free model list, the catalog (Node).
-#   lib/wire.ts        Anthropic <-> Chat Completions translation, the model field, the SSE writers (Node).
-#   LICENSE            MIT: keep it or replace it with another OSI-approved license.
+"""Self-contained free-model aggregator competition entrypoint.
 
+Run with ``python3 -P -s main.py``; only the standard library is required.
+The brief supplies the catalog, ratings, and ordered request requirements.
+Eligible free models are tried in descending quality order. Both client APIs
+share gateway failover and always report the model actually called.
+
+``--list`` prints the registration catalog without opening a server. Normal
+startup binds an ephemeral port, registers it, and polls /work until done.
+This entry derives from the official MIT Python starter and earlier local
+agent revisions. This session revises routing and transport; it does not claim
+the inherited parser, API adapters, or tests as fresh authorship.
+The TypeScript starter is retained separately as starter-reference.ts.
+"""
+
+import codecs
+import itertools
 import json
 import math
 import os
@@ -296,7 +228,13 @@ def read_brief(path: str) -> Json:
 
 def free_models(brief: Json) -> list[Json]:
     """The models this entry may serve: the brief's free ones, in the brief's order."""
-    return [m for m in brief['models'] if m['free']]
+    seen = set()
+    models = []
+    for model in brief['models']:
+        if model['free'] and model['id'] not in seen:
+            seen.add(model['id'])
+            models.append(model)
+    return models
 
 
 def capabilities_of(model: Json) -> Json:
@@ -329,10 +267,7 @@ def build_catalog(brief: Json) -> Json:
     origin differs between a live pass and its replay, and the catalog is part of the state export a
     replay must reproduce byte for byte.
 
-    TODO(catalog): keep it exact — register this set and answer GET /v1/models with it on both auth
-    headers; the column checks the register body and both answers against exactly the fourteen ids, so
-    listing fewer loses it as surely as listing more. This baseline lists every free model the brief
-    names, which is exactly the fourteen ids the column scores, so keep it that way.
+    Registration and both listing wires expose the same deduplicated free IDs.
     """
     seen: set[str] = set()
     models: list[Json] = []
@@ -543,10 +478,16 @@ def anthropic_to_openai(body: Json, model: str) -> Json:
     if is_record(choice):
         if choice.get('type') == 'auto':
             out['tool_choice'] = 'auto'
+        elif choice.get('type') == 'none':
+            out['tool_choice'] = 'none'
         elif choice.get('type') == 'any':
             out['tool_choice'] = 'required'
         elif choice.get('type') == 'tool' and isinstance(choice.get('name'), str):
             out['tool_choice'] = {'type': 'function', 'function': {'name': choice['name']}}
+    if is_record(choice) and isinstance(choice.get('disable_parallel_tool_use'), bool):
+        out['parallel_tool_calls'] = not choice['disable_parallel_tool_use']
+    if is_record(body.get('response_format')):
+        out['response_format'] = body['response_format']
     if body.get('stream') is True:
         out['stream'] = True
         out['stream_options'] = {'include_usage': True}
@@ -605,57 +546,58 @@ def sse_event(event: str | None, data: object) -> str:
 
 
 def frame_with_model(frame: str, model: str) -> str:
-    """One SSE frame with every data payload's `model` set to `model`, and its blank line kept.
+    """Preserve SSE metadata and report the gateway model on JSON chunks."""
+    payload = sse_data(frame)
+    if not payload or payload == '[DONE]':
+        return frame + '\n\n'
+    chunk = json.loads(payload)
+    if not is_record(chunk):
+        raise ValueError('gateway stream payload is not an object')
+    if chunk.get('error'):
+        raise ValueError('gateway stream reported an error')
+    metadata = [line for line in frame.split('\n') if not line.startswith('data:')]
+    metadata.append('data: ' + json.dumps({**chunk, 'model': model},
+                                         separators=(',', ':'), ensure_ascii=False))
+    return '\n'.join(metadata) + '\n\n'
 
-    Comments, `event:` lines and payloads that are not JSON objects pass through untouched. Chat
-    Completions names the model on its chunks; the client sees the id the entry dialled, never the
-    provider's spelling.
-    """
-    lines: list[str] = []
-    for line in frame.split('\n'):
-        trimmed = line.strip()
-        if not trimmed.startswith('data:'):
-            lines.append(line)
-            continue
-        payload = trimmed[5:].strip()
-        if payload == '' or payload == '[DONE]':
-            lines.append(line)
-            continue
-        try:
-            chunk = json.loads(payload)
-        except (json.JSONDecodeError, ValueError):
-            lines.append(line)
-            continue
-        if is_record(chunk):
-            lines.append(f'data: {json.dumps({**chunk, "model": model}, separators=(",", ":"), ensure_ascii=False)}')
-        else:
-            lines.append(line)
-    return '\n'.join(lines) + '\n\n'
+
+def sse_data(frame: str) -> str:
+    """Join SSE data lines according to the event-stream grammar."""
+    return '\n'.join(line[5:].removeprefix(' ') for line in frame.split('\n')
+                     if line.startswith('data:'))
 
 
 def iter_frames(chunks):
-    """SSE frames from an upstream body's byte chunks, split on the blank line that ends each one.
-
-    A frame cut across reads is held until its end arrives, and a body that ends without one is yielded
-    as it is. CRLF is normalized to LF as the SSE grammar reads it.
-    """
+    """Decode UTF-8 incrementally and normalize CR, LF, and split CRLF."""
+    decoder = codecs.getincrementaldecoder('utf-8')('replace')
     buffer = ''
-    for chunk in chunks:
-        buffer += chunk.decode('utf-8', 'replace').replace('\r\n', '\n')
-        at = buffer.find('\n\n')
-        while at != -1:
-            frame = buffer[:at]
-            buffer = buffer[at + 2 :]
+    pending_cr = False
+    for chunk in itertools.chain(chunks, [b'']):
+        text = decoder.decode(chunk, final=not chunk)
+        if pending_cr:
+            text = '\r' + text
+            pending_cr = False
+        if text.endswith('\r') and chunk:
+            text = text[:-1]
+            pending_cr = True
+        buffer += text.replace('\r\n', '\n').replace('\r', '\n')
+        while '\n\n' in buffer:
+            frame, buffer = buffer.split('\n\n', 1)
             yield frame
-            at = buffer.find('\n\n')
-    if buffer.strip() != '':
+    if buffer.strip():
         yield buffer
 
 
 def openai_stream_with_model(chunks, model: str):
     """A Chat Completions SSE stream as it came, frame by frame, every data payload's `model` the dialled id."""
+    complete = False
     for frame in iter_frames(chunks):
+        if complete:
+            break
         yield frame_with_model(frame, model)
+        complete = sse_data(frame) == '[DONE]'
+    if not complete:
+        raise ValueError('gateway stream ended before its completion marker')
 
 
 def anthropic_events_from_openai(chunks, model: str):
@@ -719,7 +661,7 @@ def anthropic_events_from_openai(chunks, model: str):
             *close_events(),
             sse_event(
                 'message_delta',
-                {'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'output_tokens': output_tokens}},
+                {'type': 'message_delta', 'delta': {'stop_reason': stop_reason, 'stop_sequence': None}, 'usage': {'input_tokens': input_tokens, 'output_tokens': output_tokens}},
             ),
             sse_event('message_stop', {'type': 'message_stop'}),
         ]
@@ -727,7 +669,7 @@ def anthropic_events_from_openai(chunks, model: str):
     def events_of_frame(frame: str) -> list[str]:
         nonlocal input_tokens, output_tokens, text_index, next_index, pending_stop
         out: list[str] = []
-        for line in frame.split('\n'):
+        for line in ['data: ' + sse_data(frame)]:
             trimmed = line.strip()
             if not trimmed.startswith('data:'):
                 continue
@@ -739,9 +681,13 @@ def anthropic_events_from_openai(chunks, model: str):
             try:
                 chunk = json.loads(payload)
             except (json.JSONDecodeError, ValueError):
-                continue
+                if not payload:
+                    continue
+                raise ValueError('gateway stream payload is not valid JSON')
             if not is_record(chunk):
-                continue
+                raise ValueError('gateway stream payload is not an object')
+            if chunk.get('error'):
+                raise ValueError('gateway stream reported an error')
             if is_record(chunk.get('usage')):
                 input_tokens = number_or_zero(chunk['usage'].get('prompt_tokens'))
                 output_tokens = number_or_zero(chunk['usage'].get('completion_tokens'))
@@ -812,10 +758,7 @@ def anthropic_events_from_openai(chunks, model: str):
         for event in events_of_frame(frame):
             yield event
     if not finished:
-        for event in start_events():
-            yield event
-        for event in finish_events(pending_stop if pending_stop is not None else 'end_turn'):
-            yield event
+        raise ValueError('gateway stream ended before its completion marker')
 
 
 # ---------------------------------------------------------------- the trial state
@@ -825,6 +768,95 @@ CATALOG = build_catalog(BRIEF)
 # Which prompt row the request now arriving is: the brief's prompts are in the client's arrival order.
 manifest_index = 0
 manifest_lock = threading.Lock()
+class RoutingState:
+    """Logical request epochs keep live and replay routing identical.
+
+    A rate limit skips the next two requests, a server failure the next one.
+    Repeated failures extend the quarantine, capped at eight request epochs.
+    No clock reading or response latency influences a model choice.
+    """
+
+    def __init__(self, brief):
+        self.brief = brief
+        self.epoch = 0
+        self.calls = 0
+        self.blocked_until = {}
+        self.failures = {}
+        self.lock = threading.Lock()
+
+    def begin(self):
+        with self.lock:
+            self.epoch += 1
+            return self.epoch
+
+    def available(self, model, epoch):
+        with self.lock:
+            return epoch > self.blocked_until.get(model, 0)
+
+    def reserve(self):
+        with self.lock:
+            if self.calls >= 60:
+                return False
+            self.calls += 1
+            return True
+
+    def failure(self, model, status, epoch):
+        if status != 429 and status < 500:
+            return
+        with self.lock:
+            count = self.failures.get(model, 0) + 1
+            self.failures[model] = count
+            skip = min(8, (2 if status == 429 else 1) * 2 ** min(count - 1, 3))
+            self.blocked_until[model] = epoch + skip
+
+    def success(self, model):
+        with self.lock:
+            self.failures.pop(model, None)
+            self.blocked_until.pop(model, None)
+
+
+routing_state = RoutingState(BRIEF)
+request_lock = threading.Lock()
+
+
+def state_for_brief():
+    global routing_state
+    if routing_state.brief is not BRIEF:
+        routing_state = RoutingState(BRIEF)
+    return routing_state
+
+
+def refusal_row(status, text, model):
+    """Record only an observed HTTP refusal, never inferred transport failures."""
+    code = 'upstream_http_error'
+    try:
+        value = json.loads(text)
+        error = value.get('error', {}) if isinstance(value, dict) else {}
+        if isinstance(error, dict):
+            reported = error.get('code') or error.get('type')
+            if isinstance(reported, (str, int)):
+                code = str(reported)[:128]
+    except (ValueError, TypeError):
+        pass
+    return {'status': status, 'code': code, 'model': model}
+
+
+def prepared_request(body, wire, model):
+    """Preserve client options while enforcing the gateway output ceiling."""
+    out = anthropic_to_openai(body, model) if wire == 'anthropic' else dict(body)
+    cap_key = 'max_completion_tokens' if 'max_completion_tokens' in out else 'max_tokens'
+    cap = out.get(cap_key, 1024)
+    if not isinstance(cap, int) or isinstance(cap, bool) or not 1 <= cap <= 8192:
+        raise ValueError('output token cap must be an integer between 1 and 8192')
+    out[cap_key] = cap
+    out['model'] = model
+    if out.get('stream') is True:
+        options = out.get('stream_options')
+        if options is not None and not isinstance(options, dict):
+            raise ValueError('stream_options must be an object')
+        out['stream_options'] = {**(options or {}), 'include_usage': True}
+    return out
+
 
 
 def log(message: str) -> None:
@@ -870,9 +902,12 @@ def requirements_for(body: Json) -> Json:
         manifest_index += 1
     prompts = BRIEF['prompts']
     if index < len(prompts):
-        return prompts[index]['requires']
-    # TODO(workload): the brief's prompt list is the declared source of each request's requirements; this
-    # fallback is a guess for a brief that holds none.
+        declared = dict(prompts[index]['requires'])
+        for key, value in requirements_from_body(body).items():
+            if value:
+                declared[key] = value
+        return declared
+    # Outside the declared workload, infer capabilities from the request.
     return requirements_from_body(body)
 
 
@@ -938,7 +973,7 @@ def dial(model: str, body: Json) -> Upstream:
         headers['accept'] = 'text/event-stream'
     request = urllib.request.Request(url, data=data, headers=headers, method='POST')
     try:
-        response = urllib.request.urlopen(request)
+        response = urllib.request.urlopen(request, timeout=30)
     except urllib.error.HTTPError as err:
         # A refusal is an answer with a status and a body, exactly as Node's fetch reports it.
         return Upstream(err.code, err)
@@ -969,6 +1004,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def dispatch(self) -> None:
         self.headers_sent = False
+        self.upstream_failures = []
         path = urlsplit(self.path).path
         try:
             if self.command == 'GET' and path == '/v1/models':
@@ -1000,6 +1036,7 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(status)
         self.send_header('content-type', 'application/json')
         self.send_header('content-length', str(len(raw)))
+        self.failure_header()
         self.headers_sent = True
         self.end_headers()
         self.wfile.write(raw)
@@ -1010,10 +1047,17 @@ class Handler(BaseHTTPRequestHandler):
         else:
             self.send_json(status, openai_error(message, error_type, None))
 
+    def failure_header(self):
+        if self.upstream_failures:
+            value = json.dumps(self.upstream_failures[:8], separators=(',', ':'), ensure_ascii=True)
+            if len(value.encode('ascii')) <= 8192:
+                self.send_header('x-makefun-upstream-failures', value)
+
     def stream_headers(self) -> None:
         self.send_response(200)
         self.send_header('content-type', 'text/event-stream')
         self.send_header('cache-control', 'no-cache')
+        self.failure_header()
         # Python's http.server does not chunk a response without a length; the close is what ends the
         # stream for the client. Node's http server chunks instead and keeps the connection alive.
         self.send_header('connection', 'close')
@@ -1027,6 +1071,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def read_json(self) -> Json | None:
         """One client request body, or None when it is not one JSON object or is too large."""
+        if self.headers.get('transfer-encoding') is not None:
+            self.close_connection = True
+            return None
         length = self.headers.get('content-length')
         if length is None:
             self.close_connection = True
@@ -1067,106 +1114,107 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, openai_model_list(listing))
 
     def chat(self) -> None:
-        """POST /v1/chat/completions: an OpenAI-shaped client, answered by free models with failover."""
-        body = self.read_json()
-        if body is None:
-            self.send_error_body('openai', 400, 'invalid_request_error', 'the request body is not one JSON object')
-            return
-        candidates = candidates_for(requirements_for(body))
-        if not candidates:
-            self.send_error_body('openai', 503, 'no_free_model', 'no free model in the brief meets this request')
-            return
-        
-        upstream = None
-        route = None
-        last_status = 502
-        last_text = 'all candidates failed'
-        for cand in candidates:
-            route = cand
-            model_id = string_of(route.get('id'))
-            try:
-                up = dial(model_id, {**body, 'model': model_id})
-            except Exception as err:
-                last_text = str(err)
-                continue
-            if up.ok:
-                upstream = up
-                break
-            else:
-                last_status = up.status
-                last_text = up.text()
-                up.close()
-        
-        if upstream is None or not upstream.ok:
-            self.refused('openai', last_status, last_text)
-            return
-
-        model_id = string_of(route.get('id')) if route else ''
-        if body.get('stream') is True:
-            self.stream_headers()
-            try:
-                for frame in openai_stream_with_model(upstream.chunks(), model_id):
-                    self.write_event(frame)
-            finally:
-                upstream.close()
-            return
-        answer = upstream.text()
-        try:
-            parsed = json.loads(answer)
-        except (json.JSONDecodeError, ValueError):
-            parsed = None
-        self.send_json(200, openai_json_with_model(parsed if is_record(parsed) else {}, model_id))
+        with request_lock:
+            self.complete('openai')
 
     def messages(self) -> None:
-        """POST /v1/messages: an Anthropic-shaped client, rewritten to Chat Completions with failover."""
+        with request_lock:
+            self.complete('anthropic')
+
+    def complete(self, wire: str) -> None:
+        """Use one routing/failover path for both client protocols.
+
+        Retry only before sending client headers. Once streaming starts, an
+        upstream failure is surfaced as an SSE error, never a second answer.
+        """
         body = self.read_json()
         if body is None:
-            self.send_error_body('anthropic', 400, 'invalid_request_error', 'the request body is not one JSON object')
+            self.send_error_body(wire, 400, 'invalid_request_error',
+                                 'the request body is not one JSON object')
             return
+        try:
+            prepared_request(body, wire, 'auto')
+        except (ValueError, TypeError) as err:
+            self.send_error_body(wire, 400, 'invalid_request_error', str(err))
+            return
+        state = state_for_brief()
+        epoch = state.begin()
         candidates = candidates_for(requirements_for(body))
         if not candidates:
-            self.send_error_body('anthropic', 503, 'overloaded_error', 'no free model in the brief meets this request')
+            error = 'overloaded_error' if wire == 'anthropic' else 'no_free_model'
+            self.send_error_body(wire, 503, error,
+                                 'no free model in the brief meets this request')
             return
-        
-        upstream = None
-        route = None
-        last_status = 502
-        last_text = 'all candidates failed'
-        for cand in candidates:
-            route = cand
-            model_id = string_of(route.get('id'))
-            try:
-                up = dial(model_id, anthropic_to_openai(body, model_id))
-            except Exception as err:
-                last_text = str(err)
+        last_status, last_text = 502, 'all eligible models failed or are cooling down'
+        streaming = body.get('stream') is True
+        for route in candidates:
+            model_id = route['id']
+            if not state.available(model_id, epoch):
                 continue
-            if up.ok:
-                upstream = up
+            if not state.reserve():
+                last_status, last_text = 429, 'trial call budget exhausted'
                 break
-            else:
-                last_status = up.status
-                last_text = up.text()
-                up.close()
-        
-        if upstream is None or not upstream.ok:
-            self.refused('anthropic', last_status, last_text)
-            return
-
-        model_id = string_of(route.get('id')) if route else ''
-        if body.get('stream') is True:
-            self.stream_headers()
+            upstream = None
             try:
-                for event in anthropic_events_from_openai(upstream.chunks(), model_id):
-                    self.write_event(event)
+                request = prepared_request(body, wire, model_id)
+                upstream = dial(model_id, request)
+                if not upstream.ok:
+                    last_status = upstream.status
+                    state.failure(model_id, upstream.status, epoch)
+                    last_text = upstream.text()
+                    self.upstream_failures.append(refusal_row(last_status, last_text, model_id))
+                    continue
+                if streaming:
+                    # Validate the first actual data frame before committing HTTP 200.
+                    frames = iter_frames(upstream.chunks())
+                    first = None
+                    for frame in frames:
+                        payload = sse_data(frame)
+                        if not payload:
+                            continue
+                        if payload == '[DONE]':
+                            raise ValueError('gateway returned an empty stream')
+                        parsed = json.loads(payload)
+                        if not is_record(parsed) or parsed.get('error') or not isinstance(parsed.get('choices'), list):
+                            raise ValueError('gateway returned an invalid stream')
+                        first = frame
+                        break
+                    if first is None:
+                        raise ValueError('gateway returned an empty stream')
+                    chunks = ((frame + '\n\n').encode('utf-8')
+                              for frame in itertools.chain([first], frames))
+                    events = (anthropic_events_from_openai(chunks, model_id)
+                              if wire == 'anthropic' else openai_stream_with_model(chunks, model_id))
+                    self.stream_headers()
+                    for event in events:
+                        self.write_event(event)
+                else:
+                    parsed = json.loads(upstream.text())
+                    if (not is_record(parsed) or parsed.get('error')
+                            or not isinstance(parsed.get('choices'), list)
+                            or not parsed['choices']
+                            or not is_record(parsed['choices'][0])
+                            or not is_record(parsed['choices'][0].get('message'))):
+                        raise ValueError('gateway returned an invalid completion')
+                    answer = (openai_to_anthropic(parsed, model_id) if wire == 'anthropic'
+                              else openai_json_with_model(parsed, model_id))
+                    self.send_json(200, answer)
+                state.success(model_id)
+                return
+            except (BrokenPipeError, ConnectionResetError):
+                raise
+            except Exception as err:
+                last_status, last_text = 502, str(err)
+                state.failure(model_id, 502, epoch)
+                if self.headers_sent:
+                    error = (anthropic_error('api_error', 'upstream stream failed')
+                             if wire == 'anthropic' else openai_error('upstream stream failed', 'upstream_error', None))
+                    self.write_event(sse_event('error' if wire == 'anthropic' else None, error))
+                    return
             finally:
-                upstream.close()
-            return
-        answer = upstream.text()
-        try:
-            parsed = json.loads(answer)
-        except (json.JSONDecodeError, ValueError):
-            parsed = None
-        self.send_json(200, openai_to_anthropic(parsed if is_record(parsed) else {}, model_id))
+                if upstream is not None:
+                    upstream.close()
+        self.refused(wire, last_status, last_text)
 
 
 # ---------------------------------------------------------------- register and poll
@@ -1242,11 +1290,11 @@ def start() -> None:
         if port == 8080:
             raise RuntimeError('the OS picked 8080, which the env owns on one layout: restart the trial')
         log(f'listening on 0.0.0.0:{port} with {len(served_models())} free models')
-        register(port, CATALOG)
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
-        threading.Thread(target=poll, name='work-poll', daemon=True).start()
-        server.serve_forever()
+        threading.Thread(target=server.serve_forever, name='http-server', daemon=True).start()
+        register(port, CATALOG)
+        poll()
     finally:
         server.server_close()
 
